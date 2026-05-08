@@ -34,6 +34,7 @@ Rules:
 - Give at least 5 weaknesses
 - Give at least 5 suggestions
 - ATS score must be between 0 and 100
+- calculate ATS score based on how well the resume is optimized for ATS systems, considering factors like keyword usage, formatting, and structure.
 - Do NOT write explanation outside JSON
 - Return ONLY JSON
 
