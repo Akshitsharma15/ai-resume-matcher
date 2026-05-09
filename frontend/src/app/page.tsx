@@ -344,6 +344,54 @@ export default function HomePage() {
               )}
             </ul>
           </div>
+          {/* KEYWORDS */}
+<div
+  style={{
+    background: "#1e293b",
+    borderRadius: "20px",
+    padding: "25px",
+    border: "1px solid #334155",
+    marginTop: "20px",
+  }}
+>
+  <h2
+    style={{
+      color: "#f59e0b",
+      marginBottom: "20px",
+    }}
+  >
+    Recommended Keywords
+  </h2>
+
+  <div
+    style={{
+      display: "flex",
+      flexWrap: "wrap",
+      gap: "12px",
+    }}
+  >
+    {result?.recommended_keywords?.length > 0 ? (
+      result.recommended_keywords.map(
+        (item: string, index: number) => (
+          <div
+            key={index}
+            style={{
+              padding: "10px 16px",
+              background: "#2563eb",
+              borderRadius: "999px",
+              fontSize: "14px",
+              fontWeight: "bold",
+            }}
+          >
+            {item}
+          </div>
+        )
+      )
+    ) : (
+      <p>No keywords found</p>
+    )}
+  </div>
+</div>
         </div>
       )}
     </div>

@@ -26,13 +26,16 @@ Format:
   "ats_score": number,
   "strengths": [],
   "weaknesses": [],
-  "suggestions": []
+  "suggestions": [],
+    "recommended_keywords": []
 }}
 
 Rules:
 - Give at least 5 strengths
 - Give at least 5 weaknesses
+- do not suggest keywords that are already present in the resume and give at least 10 recommended keywords that are not present in the resume
 - Give at least 5 suggestions
+- Keywords should be ATS-friendly technical and professional terms
 - ATS score must be between 0 and 100
 - calculate ATS score based on how well the resume is optimized for ATS systems, considering factors like keyword usage, formatting, and structure.
 - Do NOT write explanation outside JSON
