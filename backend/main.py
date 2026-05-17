@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-
+from routes.job_match import router as job_match_router
 from routes.upload import router as upload_router
 
 app = FastAPI()
@@ -16,6 +16,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.include_router(job_match_router)
 
 app.include_router(upload_router)
 

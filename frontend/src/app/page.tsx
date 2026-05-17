@@ -1,25 +1,80 @@
 "use client";
 
-import { useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
+
+type AnalysisResult = {
+  ats_score: number;
+  strengths: string[];
+  weaknesses: string[];
+  suggestions: string[];
+  recommended_keywords: string[];
+};
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 export default function HomePage() {
   const [file, setFile] = useState<File | null>(null);
-  const [result, setResult] = useState<any>(null);
+  const [result, setResult] = useState<AnalysisResult | null>(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
 
-  const handleFileChange = (
-    e: React.ChangeEvent<HTMLInputElement>
-  ) => {
-    if (e.target.files && e.target.files.length > 0) {
-      setFile(e.target.files[0]);
-    }
-  };
+  const controllerRef = useRef<AbortController | null>(null);
+  const resultsRef = useRef<HTMLElement | null>(null);
 
-  const handleUpload = async () => {
-    if (!file) {
-      alert("Please select a PDF resume");
-      return;
+  useEffect(() => {
+    return () => controllerRef.current?.abort();
+  }, []);
+
+  useEffect(() => {
+    if (result) {
+      resultsRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
     }
+  }, [result]);
+
+  const score = result?.ats_score ?? 0;
+
+  const scoreMeta = useMemo(() => {
+    if (score >= 80) {
+      return {
+        label: "Strong match",
+        textClass: "text-emerald-500 dark:text-emerald-400",
+        chipClass:
+          "bg-emerald-500/10 text-emerald-700 ring-1 ring-emerald-500/20 dark:text-emerald-300",
+        barClass: "from-emerald-400 to-green-500",
+      };
+    }
+
+    if (score >= 60) {
+      return {
+        label: "Needs refinement",
+        textClass: "text-amber-500 dark:text-amber-400",
+        chipClass:
+          "bg-amber-500/10 text-amber-700 ring-1 ring-amber-500/20 dark:text-amber-300",
+        barClass: "from-amber-400 to-orange-500",
+      };
+    }
+
+    return {
+      label: "Needs work",
+      textClass: "text-rose-500 dark:text-rose-400",
+      chipClass:
+        "bg-rose-500/10 text-rose-700 ring-1 ring-rose-500/20 dark:text-rose-300",
+      barClass: "from-rose-400 to-red-500",
+    };
+  }, [score]);
+
+  async function handleAnalyze() {
+    if (!file || loading) return;
+
+    setError("");
+    setResult(null);
+
+    controllerRef.current?.abort();
+    const controller = new AbortController();
+    controllerRef.current = controller;
 
     const formData = new FormData();
     formData.append("file", file);
@@ -27,373 +82,471 @@ export default function HomePage() {
     try {
       setLoading(true);
 
-      const response = await fetch(
-        "http://localhost:8000/upload",
-        {
-          method: "POST",
-          body: formData,
-        }
-      );
+      const response = await fetch(`${API_BASE}/upload`, {
+        method: "POST",
+        body: formData,
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        throw new Error(`Upload failed with status ${response.status}.`);
+      }
 
       const data = await response.json();
 
-      console.log("AI RESPONSE:", data);
-
-      // Prevent crash if backend fails
-      if (data.analysis) {
-        setResult(data.analysis);
-      } else {
-        alert("No analysis returned from AI");
+      if (!data?.analysis) {
+        throw new Error("The backend returned no analysis payload.");
       }
 
-    } catch (error) {
-      console.error("Upload Error:", error);
-      alert("Upload failed");
+      setResult(normalizeAnalysis(data.analysis));
+    } catch (err) {
+      if (err instanceof Error && err.name === "AbortError") return;
+
+      setError(
+        err instanceof Error ? err.message : "Something went wrong."
+      );
     } finally {
       setLoading(false);
     }
-  };
+  }
 
-  const getScoreColor = (score: number) => {
-    if (score >= 80) return "#16a34a";
-    if (score >= 60) return "#ca8a04";
-    return "#dc2626";
-  };
+  function handleFileChange(event: React.ChangeEvent<HTMLInputElement>) {
+    const selected = event.target.files?.[0] ?? null;
+    setError("");
+
+    if (!selected) {
+      setFile(null);
+      return;
+    }
+
+    const isPdf =
+      selected.type === "application/pdf" ||
+      selected.name.toLowerCase().endsWith(".pdf");
+
+    if (!isPdf) {
+      setFile(null);
+      setError("Please choose a PDF resume.");
+      return;
+    }
+
+    setFile(selected);
+  }
 
   return (
-    <div
-      style={{
-        minHeight: "100vh",
-        background: "#0f172a",
-        color: "white",
-        padding: "40px",
-        fontFamily: "Arial, sans-serif",
-      }}
-    >
-      {/* HEADER */}
-      <div
-        style={{
-          textAlign: "center",
-          marginBottom: "50px",
-        }}
-      >
-        <h1
-          style={{
-            fontSize: "48px",
-            marginBottom: "10px",
-          }}
-        >
-          AI Resume Analyzer
-        </h1>
+    <main className="min-h-screen bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
+      <p className="sr-only" aria-live="polite">
+        {loading
+          ? "Resume analysis is in progress"
+          : result
+          ? "Resume analysis loaded"
+          : error
+          ? `Error: ${error}`
+          : "Ready"}
+      </p>
 
-        <p
-          style={{
-            color: "#94a3b8",
-            fontSize: "18px",
-          }}
-        >
-          Upload your resume and get ATS insights instantly
-        </p>
-      </div>
+      <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 sm:py-8 lg:px-8 lg:py-10">
+        <section className="animate-fade-up relative overflow-hidden rounded-[28px] border border-slate-200 bg-white/90 p-5 shadow-soft backdrop-blur-sm dark:border-slate-800 dark:bg-slate-900/90 sm:p-6 lg:p-10">
+          {/* Static background glow */}
+          <div className="pointer-events-none absolute inset-0">
+            <div className="absolute -left-16 -top-16 h-48 w-48 rounded-full bg-blue-500/10 blur-3xl dark:bg-blue-400/15" />
+            <div className="absolute right-0 top-0 h-56 w-56 rounded-full bg-cyan-500/10 blur-3xl dark:bg-cyan-400/10" />
+          </div>
 
-      {/* UPLOAD CARD */}
-      <div
-        style={{
-          maxWidth: "700px",
-          margin: "0 auto",
-          background: "#1e293b",
-          padding: "30px",
-          borderRadius: "20px",
-          border: "1px solid #334155",
-          marginBottom: "40px",
-        }}
-      >
-        <input
-          type="file"
-          accept=".pdf"
-          onChange={handleFileChange}
-          style={{
-            marginBottom: "20px",
-            width: "100%",
-            color: "white",
-          }}
-        />
+          <div className="relative grid gap-8 lg:grid-cols-[1.15fr_0.85fr] lg:items-center">
+            <div>
+              <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
+                AI Resume Analyzer
+              </span>
 
-        {/* FILE NAME */}
-        {file && (
-          <p
-            style={{
-              color: "#94a3b8",
-              marginBottom: "20px",
-            }}
-          >
-            Selected File: {file.name}
-          </p>
-        )}
+              <h1 className="mt-4 max-w-3xl text-4xl font-semibold tracking-tight sm:text-5xl lg:text-6xl">
+                Analyze your resume with a{" "}
+                <span className="bg-gradient-to-r from-blue-600 to-cyan-500 bg-clip-text text-transparent dark:from-blue-400 dark:to-cyan-300">
+                  clean, modern dashboard
+                </span>
+              </h1>
 
-        <button
-          onClick={handleUpload}
-          disabled={loading}
-          style={{
-            width: "100%",
-            padding: "14px",
-            background: "#2563eb",
-            color: "white",
-            border: "none",
-            borderRadius: "10px",
-            fontSize: "16px",
-            cursor: "pointer",
-            fontWeight: "bold",
-            transition: "0.3s",
-            opacity: loading ? 0.7 : 1,
-          }}
-        >
-          {loading
-            ? "Analyzing Resume..."
-            : "Upload Resume"}
-        </button>
-      </div>
+              <p className="mt-4 max-w-2xl text-sm leading-7 text-slate-600 dark:text-slate-300 sm:text-base">
+                Upload a PDF and get an ATS score, strengths, weaknesses,
+                improvement suggestions, and recommended keywords in a
+                professional SaaS-style layout.
+              </p>
 
-      {/* RESULT DASHBOARD */}
-      {result && (
-        <div
-          style={{
-            maxWidth: "1100px",
-            margin: "0 auto",
-          }}
-        >
-          {/* SCORE CARD */}
+              <div className="mt-6 flex flex-wrap gap-2">
+                {["ATS score", "Gap analysis", "Keyword suggestions"].map(
+                  (item) => (
+                    <span
+                      key={item}
+                      className="inline-flex items-center rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700 ring-1 ring-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:ring-slate-700"
+                    >
+                      {item}
+                    </span>
+                  )
+                )}
+              </div>
+            </div>
+
+            <div className="rounded-[24px] border border-slate-200 bg-white p-5 shadow-soft transition-transform duration-200 hover:-translate-y-0.5 motion-reduce:transform-none dark:border-slate-800 dark:bg-slate-900">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h2 className="text-lg font-semibold tracking-tight sm:text-xl">
+                    Upload resume
+                  </h2>
+                  <p className="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-400">
+                    PDF only. Keep files concise for faster analysis.
+                  </p>
+                </div>
+
+                <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700 ring-1 ring-blue-100 dark:bg-blue-500/10 dark:text-blue-300 dark:ring-blue-500/20">
+                  PDF
+                </span>
+              </div>
+
+              <div className="mt-5">
+                <label
+                  htmlFor="resume"
+                  className="mb-2 block text-sm font-medium text-slate-700 dark:text-slate-300"
+                >
+                  Resume file
+                </label>
+
+                <input
+                  id="resume"
+                  type="file"
+                  accept=".pdf,application/pdf"
+                  onChange={handleFileChange}
+                  className="block w-full cursor-pointer rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-sm text-slate-600 file:mr-4 file:cursor-pointer file:rounded-xl file:border-0 file:bg-blue-600 file:px-4 file:py-2 file:font-medium file:text-white hover:file:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300 dark:file:bg-blue-500 dark:hover:file:bg-blue-600 dark:focus-visible:ring-offset-slate-950"
+                />
+              </div>
+
+              <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 dark:border-slate-800 dark:bg-slate-950">
+                <p className="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                  Selected file
+                </p>
+                <p className="mt-1 truncate text-sm text-slate-800 dark:text-slate-200">
+                  {file ? file.name : "No file selected yet"}
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleAnalyze}
+                disabled={!file || loading}
+                className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-slate-900 px-4 py-3.5 text-sm font-semibold text-white transition hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-blue-500 dark:text-slate-950 dark:hover:bg-blue-400 dark:focus-visible:ring-offset-slate-950"
+              >
+                {loading ? (
+                  <>
+                    <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white dark:border-slate-950/30 dark:border-t-slate-950" />
+                    Analyzing...
+                  </>
+                ) : (
+                  "Analyze resume"
+                )}
+              </button>
+
+              <p className="mt-3 text-xs leading-5 text-slate-500 dark:text-slate-400">
+                Tip: keep the upload action obvious and above the fold for the
+                fastest first-use experience.
+              </p>
+            </div>
+          </div>
+        </section>
+
+        {error ? (
           <div
-            style={{
-              background: "#1e293b",
-              borderRadius: "20px",
-              padding: "30px",
-              marginBottom: "30px",
-              border: "1px solid #334155",
-              textAlign: "center",
-            }}
+            role="alert"
+            className="mt-6 animate-fade-up rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 dark:border-rose-500/20 dark:bg-rose-500/10 dark:text-rose-300"
           >
-            <h2
-              style={{
-                marginBottom: "20px",
-                color: "#cbd5e1",
-              }}
-            >
-              ATS SCORE
-            </h2>
+            {error}
+          </div>
+        ) : null}
 
-            <h1
-              style={{
-                fontSize: "80px",
-                margin: 0,
-                color: getScoreColor(
-                  result?.ats_score || 0
-                ),
-              }}
-            >
-              {result?.ats_score || 0}
-            </h1>
+        {loading ? (
+          <div
+            role="status"
+            className="mt-6 animate-fade-up rounded-[24px] border border-slate-200 bg-white p-5 shadow-soft dark:border-slate-800 dark:bg-slate-900"
+          >
+            <div className="flex items-center gap-3">
+              <span className="h-5 w-5 animate-spin rounded-full border-2 border-slate-300 border-t-blue-500 dark:border-slate-700 dark:border-t-blue-400" />
+              <div>
+                <p className="text-sm font-medium text-slate-900 dark:text-slate-100">
+                  Running AI analysis
+                </p>
+                <p className="text-sm text-slate-600 dark:text-slate-400">
+                  This usually takes only a few seconds.
+                </p>
+              </div>
+            </div>
+          </div>
+        ) : null}
 
-            {/* PROGRESS BAR */}
-            <div
-              style={{
-                width: "100%",
-                height: "14px",
-                background: "#334155",
-                borderRadius: "20px",
-                marginTop: "25px",
-                overflow: "hidden",
-              }}
-            >
-              <div
-                style={{
-                  width: `${result?.ats_score || 0}%`,
-                  height: "100%",
-                  background: getScoreColor(
-                    result?.ats_score || 0
-                  ),
-                  transition: "0.5s",
-                }}
+        {result ? (
+          <section
+            ref={resultsRef}
+            className="mt-8 space-y-6 animate-fade-up"
+            aria-labelledby="resume-analysis-heading"
+          >
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h2
+                  id="resume-analysis-heading"
+                  className="text-2xl font-semibold tracking-tight"
+                >
+                  Analysis dashboard
+                </h2>
+                <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
+                  Review the results, then refine your summary, skills, and
+                  experience sections.
+                </p>
+              </div>
+            </div>
+
+            <div className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
+              <article className="rounded-[24px] border border-slate-200 bg-white p-5 shadow-soft transition-transform duration-200 hover:-translate-y-0.5 motion-reduce:transform-none dark:border-slate-800 dark:bg-slate-900 sm:p-6">
+                <div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-slate-500 dark:text-slate-400">
+                      ATS score
+                    </p>
+
+                    <div className="mt-3 flex flex-wrap items-end gap-3">
+                      <span
+                        className={`text-5xl font-semibold tracking-tight sm:text-6xl ${scoreMeta.textClass}`}
+                      >
+                        {score}
+                      </span>
+
+                      <span
+                        className={`mb-2 inline-flex rounded-full px-3 py-1 text-xs font-medium ${scoreMeta.chipClass}`}
+                      >
+                        {scoreMeta.label}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 dark:border-slate-800 dark:bg-slate-950">
+                    <p className="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                      Interpretation
+                    </p>
+                    <p className="mt-1 text-sm leading-6 text-slate-700 dark:text-slate-300">
+                      Make the score card the first thing users see after
+                      analysis.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="mt-6">
+                  <div className="mb-2 flex items-center justify-between text-xs font-medium text-slate-500 dark:text-slate-400">
+                    <span>Match strength</span>
+                    <span>{score}%</span>
+                  </div>
+
+                  <div
+                    role="progressbar"
+                    aria-label="ATS score"
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={score}
+                    className="h-3 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800"
+                  >
+                    <div
+                      className={`h-full rounded-full bg-gradient-to-r ${scoreMeta.barClass} transition-[width] duration-700 ease-out motion-reduce:transition-none`}
+                      style={{ width: `${score}%` }}
+                    />
+                  </div>
+                </div>
+
+                <div className="mt-6 grid gap-3 sm:grid-cols-3">
+                  <MiniStat label="Strengths" value={result.strengths.length} />
+                  <MiniStat
+                    label="Weaknesses"
+                    value={result.weaknesses.length}
+                  />
+                  <MiniStat
+                    label="Keywords"
+                    value={result.recommended_keywords.length}
+                  />
+                </div>
+              </article>
+
+              <KeywordCard keywords={result.recommended_keywords} />
+            </div>
+
+            <div className="grid gap-6 md:grid-cols-2">
+              <SectionCard
+                title="Strengths"
+                items={result.strengths}
+                tone="success"
+              />
+              <SectionCard
+                title="Weaknesses"
+                items={result.weaknesses}
+                tone="danger"
               />
             </div>
-          </div>
 
-          {/* GRID */}
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "1fr 1fr",
-              gap: "20px",
-            }}
-          >
-            {/* STRENGTHS */}
-            <div
-              style={{
-                background: "#1e293b",
-                borderRadius: "20px",
-                padding: "25px",
-                border: "1px solid #334155",
-              }}
-            >
-              <h2
-                style={{
-                  color: "#22c55e",
-                  marginBottom: "20px",
-                }}
-              >
-                Strengths
-              </h2>
-
-              <ul
-                style={{
-                  paddingLeft: "20px",
-                  lineHeight: "1.8",
-                }}
-              >
-                {result?.strengths?.length > 0 ? (
-                  result.strengths.map(
-                    (
-                      item: string,
-                      index: number
-                    ) => (
-                      <li key={index}>{item}</li>
-                    )
-                  )
-                ) : (
-                  <li>No strengths found</li>
-                )}
-              </ul>
-            </div>
-
-            {/* WEAKNESSES */}
-            <div
-              style={{
-                background: "#1e293b",
-                borderRadius: "20px",
-                padding: "25px",
-                border: "1px solid #334155",
-              }}
-            >
-              <h2
-                style={{
-                  color: "#ef4444",
-                  marginBottom: "20px",
-                }}
-              >
-                Weaknesses
-              </h2>
-
-              <ul
-                style={{
-                  paddingLeft: "20px",
-                  lineHeight: "1.8",
-                }}
-              >
-                {result?.weaknesses?.length > 0 ? (
-                  result.weaknesses.map(
-                    (
-                      item: string,
-                      index: number
-                    ) => (
-                      <li key={index}>{item}</li>
-                    )
-                  )
-                ) : (
-                  <li>No weaknesses found</li>
-                )}
-              </ul>
-            </div>
-          </div>
-
-          {/* SUGGESTIONS */}
-          <div
-            style={{
-              background: "#1e293b",
-              borderRadius: "20px",
-              padding: "25px",
-              border: "1px solid #334155",
-              marginTop: "20px",
-            }}
-          >
-            <h2
-              style={{
-                color: "#60a5fa",
-                marginBottom: "20px",
-              }}
-            >
-              Improvement Suggestions
-            </h2>
-
-            <ul
-              style={{
-                paddingLeft: "20px",
-                lineHeight: "1.8",
-              }}
-            >
-              {result?.suggestions?.length > 0 ? (
-                result.suggestions.map(
-                  (
-                    item: string,
-                    index: number
-                  ) => (
-                    <li key={index}>{item}</li>
-                  )
-                )
-              ) : (
-                <li>No suggestions found</li>
-              )}
-            </ul>
-          </div>
-          {/* KEYWORDS */}
-<div
-  style={{
-    background: "#1e293b",
-    borderRadius: "20px",
-    padding: "25px",
-    border: "1px solid #334155",
-    marginTop: "20px",
-  }}
->
-  <h2
-    style={{
-      color: "#f59e0b",
-      marginBottom: "20px",
-    }}
-  >
-    Recommended Keywords
-  </h2>
-
-  <div
-    style={{
-      display: "flex",
-      flexWrap: "wrap",
-      gap: "12px",
-    }}
-  >
-    {result?.recommended_keywords?.length > 0 ? (
-      result.recommended_keywords.map(
-        (item: string, index: number) => (
-          <div
-            key={index}
-            style={{
-              padding: "10px 16px",
-              background: "#2563eb",
-              borderRadius: "999px",
-              fontSize: "14px",
-              fontWeight: "bold",
-            }}
-          >
-            {item}
-          </div>
-        )
-      )
-    ) : (
-      <p>No keywords found</p>
-    )}
-  </div>
-</div>
-        </div>
-      )}
-    </div>
+            <SectionCard
+              title="Improvement suggestions"
+              items={result.suggestions}
+              tone="primary"
+            />
+          </section>
+        ) : null}
+      </div>
+    </main>
   );
 }
+
+function normalizeAnalysis(raw: unknown): AnalysisResult {
+  const value = (raw ?? {}) as Record<string, unknown>;
+
+  return {
+    ats_score: clampScore(value.ats_score),
+    strengths: toStringArray(value.strengths),
+    weaknesses: toStringArray(value.weaknesses),
+    suggestions: toStringArray(value.suggestions),
+    recommended_keywords: toStringArray(
+      value.recommended_keywords,
+      true
+    ),
+  };
+}
+
+function clampScore(value: unknown): number {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return 0;
+  return Math.max(0, Math.min(100, Math.round(num)));
+}
+
+function toStringArray(value: unknown, unique = false): string[] {
+  const arr = Array.isArray(value)
+    ? value
+        .map((item) => String(item).trim())
+        .filter(Boolean)
+    : [];
+
+  return unique ? Array.from(new Set(arr)) : arr;
+}
+
+const MiniStat = memo(function MiniStat({
+  label,
+  value,
+}: {
+  label: string;
+  value: number;
+}) {
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 dark:border-slate-800 dark:bg-slate-950">
+      <p className="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
+        {label}
+      </p>
+      <p className="mt-1 text-xl font-semibold text-slate-900 dark:text-slate-100">
+        {value}
+      </p>
+    </div>
+  );
+});
+
+const KeywordCard = memo(function KeywordCard({
+  keywords,
+}: {
+  keywords: string[];
+}) {
+  return (
+    <article className="rounded-[24px] border border-slate-200 bg-white p-5 shadow-soft transition-transform duration-200 hover:-translate-y-0.5 motion-reduce:transform-none dark:border-slate-800 dark:bg-slate-900 sm:p-6">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h3 className="text-lg font-semibold tracking-tight sm:text-xl">
+            Recommended keywords
+          </h3>
+          <p className="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-400">
+            Reuse these terms across your summary, skills, and achievement
+            bullets where they are truthful and relevant.
+          </p>
+        </div>
+
+        <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700 ring-1 ring-blue-100 dark:bg-blue-500/10 dark:text-blue-300 dark:ring-blue-500/20">
+          ATS
+        </span>
+      </div>
+
+      <div className="mt-5 flex flex-wrap gap-2.5">
+        {keywords.length ? (
+          keywords.map((keyword) => (
+            <span
+              key={keyword}
+              className="rounded-full border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-700 transition hover:-translate-y-px hover:border-blue-300 hover:text-blue-700 motion-reduce:transform-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300 dark:hover:border-blue-400/30 dark:hover:text-blue-300"
+            >
+              {keyword}
+            </span>
+          ))
+        ) : (
+          <p className="text-sm text-slate-500 dark:text-slate-400">
+            No keywords returned from the backend.
+          </p>
+        )}
+      </div>
+    </article>
+  );
+});
+
+const SectionCard = memo(function SectionCard({
+  title,
+  items,
+  tone,
+}: {
+  title: string;
+  items: string[];
+  tone: "primary" | "success" | "danger";
+}) {
+  const toneMap = {
+    primary:
+      "bg-blue-50 text-blue-700 ring-1 ring-blue-100 dark:bg-blue-500/10 dark:text-blue-300 dark:ring-blue-500/20",
+    success:
+      "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-100 dark:bg-emerald-500/10 dark:text-emerald-300 dark:ring-emerald-500/20",
+    danger:
+      "bg-rose-50 text-rose-700 ring-1 ring-rose-100 dark:bg-rose-500/10 dark:text-rose-300 dark:ring-rose-500/20",
+  };
+
+  const itemCount = items.length;
+
+  return (
+    <article className="rounded-[24px] border border-slate-200 bg-white p-5 shadow-soft transition-transform duration-200 hover:-translate-y-0.5 motion-reduce:transform-none dark:border-slate-800 dark:bg-slate-900 sm:p-6">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h3 className="text-lg font-semibold tracking-tight sm:text-xl">
+            {title}
+          </h3>
+          <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
+            {title === "Improvement suggestions"
+              ? "Treat these as the next edits to make."
+              : "Review each point before updating your resume."}
+          </p>
+        </div>
+
+        <span
+          className={`rounded-full px-3 py-1 text-xs font-medium ${toneMap[tone]}`}
+        >
+          {itemCount}
+        </span>
+      </div>
+
+      <ul className="mt-5 space-y-3">
+        {itemCount ? (
+          items.map((item, index) => (
+            <li
+              key={`${title}-${index}`}
+              className="flex items-start gap-3 text-sm leading-6 text-slate-700 dark:text-slate-300"
+            >
+              <span className="mt-2 h-1.5 w-1.5 rounded-full bg-slate-400 dark:bg-slate-500" />
+              <span>{item}</span>
+            </li>
+          ))
+        ) : (
+          <li className="text-sm text-slate-500 dark:text-slate-400">
+            No items returned from the backend.
+          </li>
+        )}
+      </ul>
+    </article>
+  );
+});
